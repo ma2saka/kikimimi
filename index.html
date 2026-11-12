@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>聞き耳</title>
+<style>
+  body { margin: 0; padding: 16px 24px; background: #fff; color: #222; font: 13px "Meiryo", "Yu Gothic", sans-serif; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  #status { color: #666; margin-left: 12px; font-weight: normal; }
+  #now { font-size: 22px; min-height: 1.6em; border: 1px solid #ccc; padding: 10px 12px; margin-bottom: 12px; }
+  #now .interim { color: #999; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: middle; }
+  th { background: #f2f2f2; font-weight: normal; }
+  .bar { height: 14px; background: #444; transition: width .25s; }
+  .pct { width: 4em; text-align: right; font-variant-numeric: tabular-nums; }
+  .label { width: 6em; }
+  #history td.text { width: 40%; }
+  #history td.top { color: #444; }
+  .src { color: #888; font-size: 11px; }
+</style>
+</head>
+<body>
+<h1>聞き耳 <span id="status">準備中</span> <button id="start" hidden>マイク開始</button></h1>
+<div id="now"><span class="final"></span><span class="interim"></span></div>
+<table id="meters"><tr><th class="label">感情</th><th class="pct">確率</th><th></th></tr></table>
+<h1 style="margin-top:20px">履歴 <span class="src">確定した発話は音声も添えて判定する</span></h1>
+<table id="history"><tr><th>発話</th><th>上位</th></tr></table>
+<script>
+const $ = (s) => document.querySelector(s);
+const LABELS = { angry: "怒り", hungry: "空腹", question: "疑問", happy: "喜び", sad: "悲しみ", tired: "疲れ", surprised: "驚き" };
+const meters = {};
+for (const [key, name] of Object.entries(LABELS)) {
+  const tr = $("#meters").insertRow();
+  tr.innerHTML = `<td class="label">${name}</td><td class="pct">-</td><td><div class="bar" style="width:0"></div></td>`;
+  meters[key] = { pct: tr.cells[1], bar: tr.cells[2].firstChild };
+}
+
+function show(probs, src) {
+  for (const [key, p] of Object.entries(probs)) {
+    if (!meters[key]) continue;
+    meters[key].pct.textContent = Math.round(p * 100) + "%";
+    meters[key].bar.style.width = (p * 100).toFixed(1) + "%";
+  }
+  $("#status").textContent = src;
+}
+
+async function decide(text, audio) {
+  const body = { text };
+  if (audio) {
+    body.mime = audio.type.split(";")[0];
+    body.audio = await blobToBase64(audio);
+  }
+  const res = await fetch("/decide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error);
+  return json;
+}
+
+const blobToBase64 = (blob) => new Promise((ok) => {
+  const r = new FileReader();
+  r.onload = () => ok(r.result.split(",")[1]);
+  r.readAsDataURL(blob);
+});
+
+// 途中結果は最新の一件だけを判定する。応答待ちの間に来た分は上書きされる。
+let pendingInterim = null, busy = false;
+async function pumpInterim() {
+  if (busy || !pendingInterim) return;
+  const text = pendingInterim; pendingInterim = null; busy = true;
+  try { show(await decide(text), "途中の判定"); } catch (e) { $("#status").textContent = e.message; }
+  busy = false; pumpInterim();
+}
+
+async function onFinal(text, audio) {
+  pendingInterim = null;
+  const tr = $("#history").insertRow(1);
+  tr.innerHTML = `<td class="text"></td><td class="top">判定中</td>`;
+  tr.cells[0].textContent = text;
+  try {
+    const probs = await decide(text, audio);
+    show(probs, "確定の判定（音声つき）");
+    tr.cells[1].textContent = Object.entries(probs).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([k, p]) => `${LABELS[k]} ${Math.round(p * 100)}%`).join("　");
+  } catch (e) { tr.cells[1].textContent = e.message; }
+}
+
+// 確定ごとに MediaRecorder を切り直し、その発話区間の音声を一つの webm にする。
+let recorder;
+function newRecorder(stream) {
+  recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+  recorder.chunks = [];
+  recorder.ondataavailable = (e) => recorder.chunks.push(e.data);
+  recorder.start();
+}
+function cutAudio(stream) {
+  const r = recorder;
+  const done = new Promise((ok) => (r.onstop = () => ok(new Blob(r.chunks, { type: "audio/webm" }))));
+  r.stop();
+  newRecorder(stream);
+  return done;
+}
+
+async function start() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { $("#status").textContent = "このブラウザは音声認識に未対応（Chrome / Edge を使う）"; return; }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  newRecorder(stream);
+  const rec = new SR();
+  rec.lang = "ja-JP"; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = async (ev) => {
+    let interim = "";
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const r = ev.results[i], text = r[0].transcript;
+      if (r.isFinal) {
+        $("#now .final").textContent = text; $("#now .interim").textContent = "";
+        onFinal(text, await cutAudio(stream));
+      } else interim += text;
+    }
+    if (interim) {
+      $("#now .final").textContent = ""; $("#now .interim").textContent = interim;
+      pendingInterim = interim; pumpInterim();
+    }
+  };
+  rec.onend = () => rec.start();
+  rec.onerror = (e) => { $("#status").textContent = "音声認識: " + e.error; };
+  rec.start();
+  $("#start").hidden = true;
+  $("#status").textContent = "聞いています";
+}
+
+start().catch(() => { $("#start").hidden = false; $("#status").textContent = "ボタンでマイクを開始"; });
+$("#start").onclick = () => start();
+</script>
+</body>
+</html>
