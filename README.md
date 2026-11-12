@@ -1,5 +1,7 @@
 # kikimimi（聞き耳）
 
+![聞き耳の画面](doc/screenshot.png)
+
 マイクの発話を日本語で書き起こし、Gemini Decision 1（Decisions API）で感情ごとの確率を出すプロトタイプ。
 
 問い: Decision 1 は話し言葉のテキストと声色から、気持ちの推定を実用的な速さと確からしさで返せるか。
