@@ -29,6 +29,11 @@
 <table id="history"><tr><th>発話</th><th>上位</th></tr></table>
 <script>
 const $ = (s) => document.querySelector(s);
+const log = (msg) => fetch("/log", { method: "POST", body: msg }).catch(() => {});
+const setStatus = (msg) => { $("#status").textContent = msg; log("status " + msg); };
+window.onerror = (m) => log("js " + m);
+window.onunhandledrejection = (e) => log("reject " + e.reason);
+log("load " + navigator.userAgent);
 const LABELS = { angry: "怒り", hungry: "空腹", question: "疑問", happy: "喜び", sad: "悲しみ", tired: "疲れ", surprised: "驚き" };
 const meters = {};
 for (const [key, name] of Object.entries(LABELS)) {
@@ -43,7 +48,7 @@ function show(probs, src) {
     meters[key].pct.textContent = Math.round(p * 100) + "%";
     meters[key].bar.style.width = (p * 100).toFixed(1) + "%";
   }
-  $("#status").textContent = src;
+  setStatus(src);
 }
 
 async function decide(text, audio) {
@@ -69,7 +74,7 @@ let pendingInterim = null, busy = false;
 async function pumpInterim() {
   if (busy || !pendingInterim) return;
   const text = pendingInterim; pendingInterim = null; busy = true;
-  try { show(await decide(text), "途中の判定"); } catch (e) { $("#status").textContent = e.message; }
+  try { show(await decide(text), "途中の判定"); } catch (e) { setStatus(e.message); }
   busy = false; pumpInterim();
 }
 
@@ -104,7 +109,7 @@ function cutAudio(stream) {
 
 async function start() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { $("#status").textContent = "このブラウザは音声認識に未対応（Chrome / Edge を使う）"; return; }
+  if (!SR) { setStatus("このブラウザは音声認識に未対応（Chrome / Edge を使う）"); return; }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   newRecorder(stream);
   const rec = new SR();
@@ -123,14 +128,17 @@ async function start() {
       pendingInterim = interim; pumpInterim();
     }
   };
-  rec.onend = () => rec.start();
-  rec.onerror = (e) => { $("#status").textContent = "音声認識: " + e.error; };
+  rec.onstart = () => log("sr start");
+  rec.onaudiostart = () => log("sr audiostart");
+  rec.onspeechstart = () => log("sr speechstart");
+  rec.onend = () => { log("sr end"); setTimeout(() => rec.start(), 300); };
+  rec.onerror = (e) => setStatus("音声認識: " + e.error);
   rec.start();
   $("#start").hidden = true;
-  $("#status").textContent = "聞いています";
+  setStatus("聞いています");
 }
 
-start().catch(() => { $("#start").hidden = false; $("#status").textContent = "ボタンでマイクを開始"; });
+start().catch((e) => { $("#start").hidden = false; setStatus("ボタンでマイクを開始 (" + e + ")"); });
 $("#start").onclick = () => start();
 </script>
 </body>

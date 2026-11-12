@@ -1,4 +1,4 @@
-# kikimimi-proto（聞き耳）
+# kikimimi（聞き耳）
 
 マイクの発話を日本語で書き起こし、Gemini Decision 1（Decisions API）で感情ごとの確率を出すプロトタイプ。
 

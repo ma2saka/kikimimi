@@ -91,14 +91,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(HTTPStatus.NOT_FOUND, b"", "text/plain")
 
     def do_POST(self) -> None:
+        if self.path == "/log":
+            print("client:", self.rfile.read(int(self.headers["Content-Length"])).decode(), flush=True)
+            self._reply(HTTPStatus.NO_CONTENT, b"", "text/plain")
+            return
         if self.path != "/decide":
             self._reply(HTTPStatus.NOT_FOUND, b"", "text/plain")
             return
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         text: str = req["text"]
+        print(f"decide: {text!r} audio={req.get('mime')} {len(req.get('audio') or '')}", flush=True)
         try:
             self._json(HTTPStatus.OK, decide(text, req.get("audio"), req.get("mime")))
         except requests.HTTPError as e:
+            print("error:", e.response.text, flush=True)
             self._json(HTTPStatus.BAD_GATEWAY, {"error": e.response.text})
 
     def _json(self, status: HTTPStatus, obj: object) -> None:
